@@ -1,0 +1,5 @@
+#define WIFI_PASSWORD "password"
+#define WIFI_SSID "ssid"
+#define DATABASE_ROOT "firebase rtdb" ex: https://docs-examples.firebaseio.com/fireblog/users.json, just the first part: https://docs-examples.firebaseio.com
+#define THINGSPEAK_API_WRITE "api key" from thingspeak.com
+#define THINGSPEAK_API_READ "api key"
