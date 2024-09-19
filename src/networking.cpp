@@ -164,6 +164,10 @@ void Networking::setup() {
   //pinMode(wifiLED, OUTPUT);
   WiFi.mode(WIFI_STA);
   WiFiMulti.addAP(WIFI_SSID, WIFI_PASSWORD);
-  blinkLight(lightBlink);
+  //blinkLight(lightBlink);
+  wifiStatusLED();
+}
 
+bool Networking::isConnected() {
+  return (WiFiMulti.run() == WL_CONNECTED);
 }

@@ -23,8 +23,8 @@ const int _SckPin = D3;
 long _offset = 0; // tare value
 int _scale = 10;
 
-// sound setup
-const int _buzzerPin = D8;
+// indicator led
+const int ledPin = D8;
 
 int period = 20;
 unsigned long time_now = 0;
@@ -57,7 +57,7 @@ void useExtractedTag();
 
 void setup()
 {
-  pinMode(_buzzerPin, OUTPUT);
+  pinMode(ledPin, OUTPUT);
   
 
   // scale setup
@@ -76,7 +76,6 @@ void setup()
   }
 
   lcd.print(F("PCF8574 is OK...")); //(F()) saves string to flash & keeps dynamic memory free
-  delay(2000);
 
   lcd.clear();
 
@@ -86,7 +85,7 @@ void setup()
   lcd.print("1. take some cards");
   lcd.setCursor(0, 2);
   lcd.print("2. place box here");
-
+  delay(2000);
 }
 
 unsigned long timeSinceLastSerialReadFromRM6300 = 0;
@@ -98,23 +97,35 @@ unsigned long lastDebounceTime = 0;  // the last time the output pin was toggled
 unsigned long debounceDelay = 500;    // the debounce time; increase if the output flickers
 
 bool isTagOk = false;
-bool firstRead = false;
+bool firstReadOfSeries = false;
 unsigned long timeOfFirstRead = 0;
 bool doneReadingDueToTimeExpiring = false;
+bool initialRead = false;
 
 unsigned uploadTag = 0;
 int uploadWeight = 0;
+bool readyToUpload = false;
+
+// led blink stuff
+bool readyToRead = true;
 
 void loop() {
 
+  if (network.isConnected() && initialRead == false) {
+    lcd.setCursor(0, 0);
+    lcd.print("Connected to wifi   ");
+  }
+
   if (hasReadStarted == true) {
+    readyToRead = false;
     if (millis() - timeSinceLastSerialReadFromRM6300 > debounceDelay) {
       hasReadStarted = false;
       hasReadEnded = true;
     }
-    if (firstRead == false) {
-      firstRead = true;
+    if (firstReadOfSeries == false) {
+      firstReadOfSeries = true;
       timeOfFirstRead = millis();
+      initialRead = true;
     }
     if (doneReadingDueToTimeExpiring == true) {
       
@@ -126,14 +137,17 @@ void loop() {
   if (hasReadEnded == true) {
     useExtractedTag();
     hasReadEnded = false;
-    lastTag = 0;
+    lastTag = 0; // unused?
     Serial.println("Read ended, ready for the next one");
-    firstRead = false;
+    firstReadOfSeries = false;
     lcd.setCursor(0, 0);
     lcd.print("Ready to read tag");
     lcd.setCursor(0, 1);
     lcd.print("                  ");
+    readyToRead = true;
   }
+
+  digitalWrite(ledPin, ((readyToRead == true) && millis() % 1000 < 500));
 
 
   if (ssrfid.available() > 0){
@@ -198,6 +212,10 @@ void useExtractedTag() {
     lcd.setCursor(0, 1);
     lcd.print("Please remove box.");
     doneReadingDueToTimeExpiring = true;
+    // store weight and tag and prepare for upload
+    uploadTag = tag;
+    uploadWeight = scaleValue;
+    readyToUpload = true;
     return;
   } 
 
@@ -208,9 +226,7 @@ void useExtractedTag() {
   if (tag == 10622595) {
     _offset = getValue();
    
-    //tone(_buzzerPin, 1000, 2000);
   } else { // if its any other card
-    noTone(_buzzerPin);
     lcd.setCursor(0, 3);
     lcd.print("                  ");
     lcd.setCursor(8, 3);
