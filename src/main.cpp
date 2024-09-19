@@ -21,13 +21,14 @@ LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POS
 const int _DoutPin = D7;
 const int _SckPin = D3;       
 long _offset = 0; // tare value
-int _scale = 500;
+int _scale = 10;
 
 // sound setup
 const int _buzzerPin = D8;
 
 int period = 20;
 unsigned long time_now = 0;
+long scaleValue = 0;
 
 // networking class
 Networking network;
@@ -43,9 +44,6 @@ SoftwareSerial ssrfid = SoftwareSerial(D5,D6); // RX, TX
 char buffer[BUFFER_SIZE]; // used to store an incoming data frame 
 int buffer_index = 0;
 
-// rfid input debounce
-unsigned long lastDebounceTime = 0;  // the last time the output pin was toggled
-unsigned long debounceDelay = 50;    // the debounce time; increase if the output flickers
 
 
 unsigned extract_tag();
@@ -53,32 +51,24 @@ long hexstr_to_value(char *str, unsigned int length);
 long getValue();
 void prepareScale();
 float readWeight();
+void useExtractedTag();
  
 
 
 void setup()
 {
   pinMode(_buzzerPin, OUTPUT);
-  /*
-  WiFi.persistent(false);           //disable saving wifi config into SDK flash area
-  WiFi.forceSleepBegin();           //disable AP & station by calling "WiFi.mode(WIFI_OFF)" & put modem to sleep
-
-  Serial.begin(115200);
-  */
+  
 
   // scale setup
   network.setup();
   prepareScale();
 
-
-
   // serial setup
   Serial.begin(9600);
   ssrfid.begin(9600);
   ssrfid.listen(); 
- 
-  Serial.println("INIT DONE");
- 
+  
   while (lcd.begin(COLUMS, ROWS, LCD_5x8DOTS, 4, 5, 400000, 250) != 1) //colums, rows, characters size, SDA, SCL, I2C speed in Hz, I2C stretch time in usec 
   {
     Serial.println(F("PCF8574 is not connected or lcd pins declaration is wrong. Only pins numbers: 4,5,6,16,11,12,13,14 are legal."));
@@ -90,22 +80,66 @@ void setup()
 
   lcd.clear();
 
-  /* prints static text */
-}
-/*
-void loop()
-{
-  lcd.setCursor(14, 2);             //set 15-th colum & 3-rd  row, 1-st colum & row started at zero
-  lcd.print(random(10, 1000));
-  lcd.write(LCD_SPACE_SYMBOL);
+  lcd.setCursor(0, 0);
+  lcd.print("Ready to count cards");
+  lcd.setCursor(0, 1);
+  lcd.print("1. take some cards");
+  lcd.setCursor(0, 2);
+  lcd.print("2. place box here");
 
-  delay(1000);
 }
-*/
 
-int counter = 0;
+unsigned long timeSinceLastSerialReadFromRM6300 = 0;
+bool hasReadStarted = false;
+bool hasReadEnded = false;
+unsigned lastTag = 0;
+// rfid input debounce
+unsigned long lastDebounceTime = 0;  // the last time the output pin was toggled
+unsigned long debounceDelay = 500;    // the debounce time; increase if the output flickers
+
+bool isTagOk = false;
+bool firstRead = false;
+unsigned long timeOfFirstRead = 0;
+bool doneReadingDueToTimeExpiring = false;
+
+unsigned uploadTag = 0;
+int uploadWeight = 0;
+
 void loop() {
+
+  if (hasReadStarted == true) {
+    if (millis() - timeSinceLastSerialReadFromRM6300 > debounceDelay) {
+      hasReadStarted = false;
+      hasReadEnded = true;
+    }
+    if (firstRead == false) {
+      firstRead = true;
+      timeOfFirstRead = millis();
+    }
+    if (doneReadingDueToTimeExpiring == true) {
+      
+      lcd.setCursor(0, 0);
+      lcd.print("                    ");
+    }
+  }
+
+  if (hasReadEnded == true) {
+    useExtractedTag();
+    hasReadEnded = false;
+    lastTag = 0;
+    Serial.println("Read ended, ready for the next one");
+    firstRead = false;
+    lcd.setCursor(0, 0);
+    lcd.print("Ready to read tag");
+    lcd.setCursor(0, 1);
+    lcd.print("                  ");
+  }
+
+
   if (ssrfid.available() > 0){
+    hasReadStarted = true;
+    timeSinceLastSerialReadFromRM6300 = millis();
+
     bool call_extract_tag = false;
     Serial.println("Data available");
     int ssvalue = ssrfid.read(); // read
@@ -130,26 +164,16 @@ void loop() {
 
     if (call_extract_tag == true) {
       if (buffer_index == BUFFER_SIZE) {
-        unsigned tag = extract_tag();
-        lcd.setCursor(0, 2);  
-        lcd.print(tag);
-        if (tag == 10622595) {
-          _offset = getValue();
-          counter = counter + 1;
-          //tone(_buzzerPin, 1000, 2000);
-          lcd.setCursor(0, 3);
-          lcd.print("        counter: ");
-          lcd.print(counter);
-        } else { // if its any other card
-          noTone(_buzzerPin);
-        }
+        useExtractedTag();
       } else { // something is wrong... start again looking for preamble (value: 2)
         buffer_index = 0;
         return;
       }
-    }    
+    }
   }
-  long scaleValue;
+
+  // always update the scale value
+  
   if (millis() > time_now + period) {
     time_now = millis();
     scaleValue = -1 * readWeight();
@@ -159,6 +183,40 @@ void loop() {
     lcd.print(scaleValue);
     lcd.print(" g");
   }    
+}
+
+void useExtractedTag() {
+  unsigned tag = extract_tag();
+  if (isTagOk == false) {
+    return;
+  }
+
+
+  // after 2 seconds, we stop printing tags. 
+  if ((millis() - timeOfFirstRead > 2000) /*&& (tag != lastTag)*/) {
+    Serial.println("2 seconds have passed, stopping reading tags");
+    lcd.setCursor(0, 1);
+    lcd.print("Please remove box.");
+    doneReadingDueToTimeExpiring = true;
+    return;
+  } 
+
+  lcd.setCursor(0, 2);
+  lcd.print("                 ");  
+  lcd.setCursor(0, 2);
+  lcd.print(tag);
+  if (tag == 10622595) {
+    _offset = getValue();
+   
+    //tone(_buzzerPin, 1000, 2000);
+  } else { // if its any other card
+    noTone(_buzzerPin);
+    lcd.setCursor(0, 3);
+    lcd.print("                  ");
+    lcd.setCursor(8, 3);
+    lcd.print(scaleValue);
+    lcd.print(" g");
+  }
 }
 
 unsigned extract_tag() {
@@ -209,8 +267,10 @@ unsigned extract_tag() {
     Serial.print(checksum, HEX);
     if (checksum == hexstr_to_value(msg_checksum, CHECKSUM_SIZE)) { // compare calculated checksum to retrieved checksum
       Serial.print(" (OK)"); // calculated checksum corresponds to transmitted checksum!
+      isTagOk = true;
     } else {
       Serial.print(" (NOT OK)"); // checksums do not match
+      isTagOk = false;
     }
 
     Serial.println("");
