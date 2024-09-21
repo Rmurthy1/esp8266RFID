@@ -52,13 +52,9 @@ float readWeight();
 void useExtractedTag();
 void readRFIDSerialValue();
  
-
-
 void setup()
 {
   pinMode(ledPin, OUTPUT);
-  
-
   // scale setup
   network.setup();
   prepareScale();
@@ -170,7 +166,7 @@ void loop() {
     lcd.print("                  ");
     readyToRead = true;
   }
-  digitalWrite(ledPin, ((readyToRead == true) && millis() % 1000 < 500));
+  digitalWrite(ledPin, ((readyToRead == true) /*&& millis() % 1000 < 500*/ ));
   readRFIDSerialValue();
   // always update the scale value
   
@@ -271,7 +267,7 @@ void readRFIDSerialValue() {
   }
 }
 
-// extracts the tag from the buffer
+// extracts the tag from the buffer, called in useExtractedTag()
 // this mutates the buffer, buffer_index, isTagOk, and returns the tag
 unsigned extract_tag() {
     char msg_head = buffer[0];
