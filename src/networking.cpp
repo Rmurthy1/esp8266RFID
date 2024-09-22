@@ -41,6 +41,7 @@ void prepareJSON(String message);
 String getValue(String data, char separator, int index);
 void wifiStatusLED();
 void updateRate(int rate);
+void writeDataToFireBaseDatabase(String payload, String endpoint, bool &success);
 
 // update the delay time between writes to ThingSpeak, in ms. default is 10000
 void updateRate(int rate) {
@@ -111,7 +112,11 @@ void thingSpeakWriteREST(String data) {
   
 }
 
-// total tokens will
+// prepare the JSON object to be sent to ThingSpeak, this is called from sendDataToThingSpeak, which is called from the user of the library.
+// the data is a string that is tokenized by the semicolon, then the tokens are counted and the data is prepared.
+// the data is then put into the JSON object.
+// the JSON object is then serialized into a string.
+// the string is then sent to ThingSpeak.
 void prepareJSON(String message) {
   doc["api_key"] = THINGSPEAK_API_WRITE;
   // tokenize the string, count the tokens, prepare the data.
@@ -170,4 +175,64 @@ void Networking::setup() {
 
 bool Networking::isConnected() {
   return (WiFiMulti.run() == WL_CONNECTED);
+}
+
+
+String preparePayload(String data) {
+  String payload = "{";
+  payload += "\"weight\":";
+  payload += data;
+  payload += ",";
+  payload += "\"timestamp\":{\".sv\": \"timestamp\"}}";
+  return payload;
+}
+
+// firebase write, this is called from the user of the library. 
+// params: payload, endpoint
+// payload is the data to be sent to the database
+// endpoint is the path to the database 
+//#define TEMP_ENDPOINT "/data/temps/current_temp.json"
+void Networking::writeDataToFireBaseDatabase(String payload, String endpoint, bool &success) {
+
+  std::unique_ptr<BearSSL::WiFiClientSecure> client(new BearSSL::WiFiClientSecure);
+
+  //client->setFingerprint(fingerprint);
+  // Or, if you happy to ignore the SSL certificate, then use the following line instead:
+  client->setInsecure();
+
+  HTTPClient https;
+
+  String databaseEndpoint = String(DATABASE_ROOT) + endpoint;
+
+  String preparedPayload = preparePayload(payload);
+
+  Serial.print("[HTTPS] begin...\n");
+  if (https.begin(*client, databaseEndpoint)) {  // HTTPS
+
+    https.addHeader("Content-Type", "application/json");
+    Serial.print("[HTTPS] GET...\n");
+    // start connection and send HTTP header
+    int httpCode = https.PUT(preparedPayload);  // post vs put, post gives a child and put overwrites
+
+    // httpCode will be negative on error
+    if (httpCode > 0) {
+      // HTTP header has been send and Server response header has been handled
+      Serial.printf("[HTTPS] GET... code: %d\n", httpCode);
+
+
+      // file found at server
+      if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
+        String payload = https.getString();
+        Serial.println(payload);
+        success = true; // this should be passed in as a reference
+      }
+    } else {
+      Serial.printf("[HTTPS] GET... failed, error: %s\n", https.errorToString(httpCode).c_str());
+    }
+
+    https.end();
+
+  } else {
+    Serial.printf("[HTTPS] Unable to connect\n");
+  }
 }

@@ -51,6 +51,7 @@ void prepareScale();
 float readWeight();
 void useExtractedTag();
 void readRFIDSerialValue();
+void updateScaleValueAndDisplay();
  
 void setup()
 {
@@ -84,7 +85,7 @@ void setup()
 }
 
 unsigned long timeSinceLastSerialReadFromRM6300 = 0;
-bool hasReadStarted = false;
+bool hasReadStarted = false; // set to true when data comes in over the serial from the rfid reader
 bool hasReadEnded = false;
 unsigned lastTag = 0;
 // rfid input debounce
@@ -94,7 +95,7 @@ unsigned long debounceDelay = 1000;    // the debounce time; increase if the out
 bool isTagOk = false; // used to determine if the tag is valid (in useExtractedTag()), resets after each tag read. mutates in extract_tag()
 bool firstReadOfSeries = false; // used to determine if the first read of a series has been made, resets after 2 seconds of no serial reads
 unsigned long timeOfFirstRead = 0;
-bool doneReadingDueToTimeExpiring = false;
+bool doneReadingDueToTimeExpiring = false; // used to determine if the read has ended due to the two second passing, resets after each tag read
 bool initialRead = false; // used to determine if the first read has been made, doesn't reset
 
 unsigned uploadTag = 0;
@@ -105,7 +106,12 @@ int uploadWeight = 0;
 bool readyToRead = true;
 
 bool startUpload = false;
-bool uploadOnce = false; // do i really need this guy? or can i get away with startUpload?
+bool uploadAndPrintMessageOnce = false; // do i really need this guy? or can i get away with startUpload?
+
+bool doneUploading = false;
+bool printUploadDoneMessageOnce = false;
+
+bool tareCardRead = false;
 
 void loop() {
 
@@ -119,15 +125,17 @@ void loop() {
     if (millis() - timeSinceLastSerialReadFromRM6300 > debounceDelay) { // the big reset happens here
       Serial.println("inside of debounce delay for rfid, this should be called once data is done being sent from the rfid chip"); // called once
       hasReadStarted = false;
-      hasReadEnded = true;
+      hasReadEnded = true; // sets one of the flags for the big reset at the end
     }
     if (firstReadOfSeries == false) {
+      Serial.println("first read of series"); // called once
       firstReadOfSeries = true;
       timeOfFirstRead = millis();
       initialRead = true;
-      startUpload = false;
+      //startUpload = false; // should we move this to the end with the others? // moved to end for now
       lcd.clear();
     }
+    //
     if (doneReadingDueToTimeExpiring == true) {
       /*Serial.println("read ended due to the two second passing, data will continue to come from the chip"); // called many times
       lcd.setCursor(0, 0);
@@ -136,28 +144,41 @@ void loop() {
       // just need to set a variable once and then we can upload
       if (startUpload == false) {
         startUpload = true;
-        uploadOnce = true;
+        uploadAndPrintMessageOnce = true;
       }
     }
   }
 
   if (startUpload == true) {
     //Serial.println("upload test ");
-    if (uploadOnce == true) {
+    if (uploadAndPrintMessageOnce == true) {
       Serial.println("upload once");
-      uploadOnce = false;
+      uploadAndPrintMessageOnce = false;
       lcd.setCursor(0, 2);
       lcd.print("uploading ");
       lcd.print(uploadTag);
+      String endpoint = "/data/" + String(uploadTag) + ".json";
+      Serial.println(endpoint);
+      network.writeDataToFireBaseDatabase(String(uploadWeight), endpoint, doneUploading); // once this is done, doneUploading will be true
     }
   }
+  // this is the case where the upload is finished but the read is still ongoing, only called once instead of many times
+  if (doneUploading == true && printUploadDoneMessageOnce == false) {
+    lcd.setCursor(0, 2);
+    lcd.print("                  ");
+    lcd.setCursor(0, 2);
+    lcd.print("upload done");
+    printUploadDoneMessageOnce = true;
+    Serial.println("upload done message printed, should only see this once per upload");
+  }
 
-  if (hasReadEnded == true) {
+// this is the case where the read has ended and the upload is done, and the box is removed from the tag
+  if (hasReadEnded == true && doneUploading == true) {
     //useExtractedTag(); // not sure why i had this here, it happens too late i think
-    hasReadEnded = false;
+
     lastTag = 0; // unused?
     Serial.println("Read ended, ready for the next one");
-    firstReadOfSeries = false;
+
     lcd.setCursor(0, 0);
     lcd.print("Ready to read tag");
     lcd.setCursor(0, 1);
@@ -165,12 +186,23 @@ void loop() {
     lcd.setCursor(0, 2);
     lcd.print("                  ");
     readyToRead = true;
+
+    hasReadEnded = false;
+    firstReadOfSeries = false;
+    doneUploading = false;
+    printUploadDoneMessageOnce = false;
+    tareCardRead = false;
+    startUpload = false; // should we move this to the end with the others?
   }
-  digitalWrite(ledPin, ((readyToRead == true) /*&& millis() % 1000 < 500*/ ));
-  readRFIDSerialValue();
-  // always update the scale value
-  
-  if (millis() > time_now + period) {
+  digitalWrite(ledPin, ((readyToRead == true) /*&& millis() % 1000 < 500*/ )); // led on when ready to read
+  readRFIDSerialValue(); // always read the serial value
+  updateScaleValueAndDisplay(); // always update the scale value and display it
+}
+
+// called from loop, reads the weight from the scale and updates the lcd.
+// this mutates the scaleValue, time_now
+void updateScaleValueAndDisplay(){
+   if (millis() > time_now + period) {
     time_now = millis();
     scaleValue = -1 * readWeight();
     lcd.setCursor(0, 3);
@@ -178,7 +210,7 @@ void loop() {
     lcd.setCursor(0, 3);
     lcd.print(scaleValue);
     lcd.print(" g");
-  }    
+  } 
 }
 
 /*these are copilot comments, i just wanted to see what all the hype is about*/
@@ -208,21 +240,26 @@ void useExtractedTag() { // called from readRFIDSerialValue()
   lcd.print("                 ");  
   lcd.setCursor(0, 2);
   lcd.print(tag);*/
-  if (tag == 10622595) {
+  if (tag == 10622595 || tag == 11274399) {
     _offset = getValue();
-   
-  } else { // if its any other card
-    lcd.setCursor(0, 3);
-    lcd.print("                  ");
-    lcd.setCursor(8, 3);
-    lcd.print(scaleValue);
-    lcd.print(" g");
-  // store weight and tag and prepare for upload
-  uploadTag = tag;
-  uploadWeight = scaleValue;
-  //readyToUpload = true;
-
+    tareCardRead = true;
   }
+  lcd.setCursor(0, 3);
+  lcd.print("                  ");
+  lcd.setCursor(8, 3);
+  lcd.print(scaleValue);
+  lcd.print(" g");
+  if (tareCardRead == true){
+    lcd.setCursor(8, 3);
+    lcd.print("tare");
+  }
+
+  
+  // store weight and tag and prepare for upload
+    uploadTag = tag;
+    uploadWeight = scaleValue;
+    //readyToUpload = true;
+    Serial.println("tag: " + String(tag) + " weight: " + String(scaleValue));
 }
 
 
